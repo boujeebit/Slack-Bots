@@ -134,9 +134,11 @@ def post_recommendation_to_chat(rec, channel):
             "fallback": plaintext,
             "color": "#36a64f",
             "pretext": plaintext,
-            "title": concept['name'],
+            "title": concept['title'],
             "title_link": concept['url'],
             "image_url": concept['image'],
+            "footer": "Wikipedia",
+            "footer_icon": "https://en.wikipedia.org/static/favicon/wikipedia.ico",
         }
     ]
 
@@ -147,9 +149,10 @@ def post_recommendation_to_chat(rec, channel):
         recommenders.append(source['name'])
         
     recommenders_msg =  "Recommended by: " + ", ".join(recommenders)
+
     attachments.append({
             "fallback" : recommenders_msg,
-            "title" : recommenders_msg,
+            "text" : recommenders_msg,
         })
     slack_client.api_call("chat.postMessage", channel=channel, attachments=attachments, as_user=True)
 

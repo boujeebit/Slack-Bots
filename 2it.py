@@ -1,5 +1,6 @@
 import os, requests
 import time
+import json
 from slackclient import SlackClient
 
 
@@ -12,8 +13,6 @@ REC_COMMAND = "recommend"
 HLP_COMMAND = "help"
 # instantiate Slack & Twilio clients
 slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
-
-USER_TOKEN = SlackClient(os.environ.get('USER_ID'))
 
 
 def handle_command(command, channel, user):
@@ -37,6 +36,8 @@ def handle_command(command, channel, user):
                 break
 
         response = "%s, %s has made a recommendation: %s" % (get_user_name(send_to), get_user_name(user.upper()), recommendation)
+        print "Going to recommend"
+        recommend(user.upper(), send_to, recommendation)
         slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
 
     elif command[0] == HLP_COMMAND:
@@ -62,12 +63,44 @@ def parse_slack_output(slack_rtm_output):
 
     return None, None, None
 
+# Creates a new recommendation where source is recommending concept to the target.
+def recommend(source, target, concept):
+    print "recommending.."
+    api_request = "http://sms.nullify.online:8000/api/recommendations"
+
+    data = {
+        "recommendation" : {
+            "concept" : concept,
+            "source" : get_person(source)['id'],
+            "target" : get_person(target)['id'],
+            "message" : "",
+        }
+    }
+
+    r = requests.post(api_request, json=data)
+    print r.text
+
+# Gets a person object based on a slack_id from our api.
+def get_person(slack_id):
+    api_request = "http://sms.nullify.online:8000/api/persons"
+    data = {
+        "person" : {
+            "slack" : slack_id
+        }
+    }
+
+    res = requests.post(api_request, json=data)
+    print res.text
+    return json.loads(res.text)['person']
+
+
 def get_user_name(userid):
     key =os.environ.get('USER_KEY')
     api_request = "https://slack.com/api/users.profile.get?token=%s&user=%s&pretty=1" % (key, userid,)
 
     r = requests.get(api_request)
     r = r.text.split()
+
     return r[r.index('"first_name":')+1][1:-2]
 
 def get_user_from_string(command):

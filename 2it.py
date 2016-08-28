@@ -8,12 +8,15 @@ from slackclient import SlackClient
 BOT_ID = os.environ.get("BOT_ID")
 
 # constants
+RECOMMEND_STATUS = {'PENDING' : 1, 'DISMISSED' : 2, 'COMPLETED' : 3}
 AT_BOT = "<@" + BOT_ID + ">"
 REC_COMMAND = "recommend"
 HLP_COMMAND = "help"
 RANDOM_COMMAND = "random"
+GET_COMMAND = "get"
+COMPLETE_COMMAND = "I"
 SERVER_PATH = "http://sms.nullify.online:8000"
-DEV = True
+DEV = False
 
 # instantiate Slack & Twilio clients
 slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
@@ -23,7 +26,7 @@ if DEV:
 
 def handle_command(command, channel, user):
 
-    command = command.split(' ')
+    command = command.split()
 
     if command[0] == REC_COMMAND:
 
@@ -49,10 +52,15 @@ def handle_command(command, channel, user):
 
 
     elif command[0] == HLP_COMMAND:
-        response = "Welcome to the 2it bot. Here are sample commands to get started.\n  @2it recommend Mr. Robot to @adam\n  @2it recommend Harry Potter and the Sorcerer's Stone to @Ryan"
+        response = "Welcome to the 2it bot. Here are sample commands to get started.\n" + \
+            "@2it recommend <place> to <username>\n" + \
+            "@2it recommend <thing> to <username>\n" + \
+            "@2it random\n" + \
+            "@2it I visited <location>\n"
+
         slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
 
-    elif command[0] == RANDOM_COMMAND:
+    elif command[0] == RANDOM_COMMAND or command[0] == GET_COMMAND:
         rec = get_random_recommendation(user.upper())
         print rec
         if not "errors" in rec:
@@ -60,6 +68,25 @@ def handle_command(command, channel, user):
         else:
             slack_client.api_call("chat.postMessage", channel=channel, text=rec['errors']['message'], as_user=True)
 
+    elif command[0] == COMPLETE_COMMAND:
+        if len(command) < 3:
+            slack_client.api_call("chat.postMessage", channel=channel, text="Sorry, I couldn't recognize your request.\nTry out:\nI <watched> <Ironman>", as_user=True)
+
+        action_verb = command[1]
+
+        concept_name = ' '.join(command[2:]).strip()
+        rec = get_recommendation_by_concept(user.upper(), concept_name)
+        if not "errors" in rec:
+            completed_rec = complete_recommendation(rec)
+            if completed_rec and not "errors" in completed_rec:
+                post_completion_to_chat(completed_rec, channel, action_verb)
+            else:
+                slack_client.api_call("chat.postMessage", channel=channel, text="Couldn't find %s to mark complete." % concept_name, as_user=True)
+        else:
+            slack_client.api_call("chat.postMessage", channel=channel, text=rec['errors']['message'], as_user=True)
+
+        
+        
     else: 
         response = "I didn't understand that. Use the 'help' command to learn more."
         slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
@@ -122,7 +149,27 @@ def get_random_recommendation(slack_id):
     api_request = SERVER_PATH + "/api/recommendations?slack=" + slack_id
     res = requests.get(api_request)
     return json.loads(res.text)
-    
+
+# Fetches a single set of recommendations by concept name.
+def get_recommendation_by_concept(slack_id, concept_name):
+    print "Getting recommendation for slack_id=" + slack_id + "&concept=" + concept_name
+    api_request = SERVER_PATH + "/api/recommendations?slack=" + slack_id + "&concept=" + concept_name + "&query=concept"
+    res = requests.get(api_request)
+    print res.text
+    return json.loads(res.text)
+
+def complete_recommendation(rec):
+    for r in rec['recommendations']:
+        api_request = SERVER_PATH + "/api/recommendations/" + str(r['id'])
+        r['status'] = RECOMMEND_STATUS['COMPLETED']
+        data = {
+            "recommendation" : r
+        }
+        
+        res = requests.put(api_request, json=data)
+        print "Completed: " + res.text
+        return json.loads(res.text)
+
 # Posts a single recommendation to the slack channel.
 def post_recommendation_to_chat(rec, channel):
     concept = rec['concept']
@@ -134,7 +181,7 @@ def post_recommendation_to_chat(rec, channel):
 
     target = (person for person in people if person['id'] == recommendations[0]['target']).next()
 
-    plaintext = target['name'] + " should get around to checking out " + concept['name']
+    plaintext = target['name'] + " should get around to checking out " + concept['name'] + "."
 
     link = concept['url']
 
@@ -166,6 +213,47 @@ def post_recommendation_to_chat(rec, channel):
         })
     slack_client.api_call("chat.postMessage", channel=channel, attachments=attachments, as_user=True)
 
+def post_completion_to_chat(rec, channel, verb):
+    concept = rec['concept']
+    if 'recommendations' in rec:
+        recommendations = rec['recommendations']
+    else:
+        recommendations = [rec['recommendation']]
+    people = rec['persons']
+
+    target = (person for person in people if person['id'] == recommendations[0]['target']).next()
+
+    plaintext = "Cheers! " +target['name'] + " just " + verb+ " " + concept['name'] + "."
+
+    link = concept['url']
+
+    attachments = [
+        {
+            "fallback": plaintext,
+            "color": "#36a64f",
+            "pretext": plaintext,
+            "title": concept['title'] + " :heavy_check_mark:",
+            "title_link": concept['url'],
+            "image_url": concept['image'],
+            "footer": "Wikipedia",
+            "footer_icon": "https://en.wikipedia.org/static/favicon/wikipedia.ico",
+        }
+    ]
+
+    recommenders = []
+    for r in recommendations:
+        print r
+        source = (person for person in people if person['id'] == r['source']).next()
+        recommenders.append(source['name'])
+        
+    recommenders_msg =  "Recommended by: " + ", ".join(recommenders)
+
+    attachments.append({
+            "fallback" : recommenders_msg,
+            "text" : recommenders_msg,
+            "color" : "#8736a6",
+        })
+    slack_client.api_call("chat.postMessage", channel=channel, attachments=attachments, as_user=True)
 
 # Returns the slack profile object for the userid.
 def get_profile(userid):

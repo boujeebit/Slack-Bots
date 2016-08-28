@@ -11,9 +11,15 @@ BOT_ID = os.environ.get("BOT_ID")
 AT_BOT = "<@" + BOT_ID + ">"
 REC_COMMAND = "recommend"
 HLP_COMMAND = "help"
+RANDOM_COMMAND = "random"
+SERVER_PATH = "http://sms.nullify.online:8000"
+DEV = True
+
 # instantiate Slack & Twilio clients
 slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
 
+if DEV:
+    SERVER_PATH = "http://10.3.17.200:8000"
 
 def handle_command(command, channel, user):
 
@@ -36,13 +42,20 @@ def handle_command(command, channel, user):
                 break
 
         response = "%s, %s has made a recommendation: %s" % (get_user_name(send_to), get_user_name(user.upper()), recommendation)
-        print "Going to recommend"
         recommend(user.upper(), send_to, recommendation)
         slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
 
     elif command[0] == HLP_COMMAND:
         response = "Welcome to the 2it bot. Here are sample commands to get started.\n  @2it recommend Mr. Robot to @adam\n  @2it recommend Harry Potter and the Sorcerer's Stone to @Ryan"
         slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
+
+    elif command[0] == RANDOM_COMMAND:
+        rec = get_random_recommendation(user.upper())
+        print rec
+        if not "errors" in rec:
+            post_recommendation_to_chat(rec, channel)
+        else:
+            slack_client.api_call("chat.postMessage", channel=channel, text=rec['errors']['message'], as_user=True)
 
     else: 
         response = "I didn't understand that. Use the 'help' command to learn more."
@@ -66,7 +79,7 @@ def parse_slack_output(slack_rtm_output):
 # Creates a new recommendation where source is recommending concept to the target.
 def recommend(source, target, concept):
     print "recommending.."
-    api_request = "http://sms.nullify.online:8000/api/recommendations"
+    api_request = SERVER_PATH + "/api/recommendations"
 
     data = {
         "recommendation" : {
@@ -82,10 +95,16 @@ def recommend(source, target, concept):
 
 # Gets a person object based on a slack_id from our api.
 def get_person(slack_id):
-    api_request = "http://sms.nullify.online:8000/api/persons"
+    print "Getting person: " + slack_id
+
+    slack_profile = get_profile(slack_id)
+
+    api_request = SERVER_PATH + "/api/persons"
     data = {
         "person" : {
-            "slack" : slack_id
+            "slack" : slack_id,
+            "email" : slack_profile['email'],
+            "name" : slack_profile['real_name_normalized']
         }
     }
 
@@ -93,15 +112,59 @@ def get_person(slack_id):
     print res.text
     return json.loads(res.text)['person']
 
+# Gets a random recommendation for target=slack_id.
+def get_random_recommendation(slack_id):
+    print "Getting random recommendation for slack_id=" + slack_id
+    api_request = SERVER_PATH + "/api/recommendations?slack=" + slack_id
+    res = requests.get(api_request)
+    return json.loads(res.text)
+    
+# Posts a single recommendation to the slack channel.
+def post_recommendation_to_chat(rec, channel):
+    concept = rec['concept']
+    recommendations = rec['recommendations']
+    people = rec['persons']
 
-def get_user_name(userid):
+    plaintext = "You should get around to checking out " + concept['name']
+
+    link = concept['url']
+
+    attachments = [
+        {
+            "fallback": plaintext,
+            "color": "#36a64f",
+            "pretext": plaintext,
+            "title": concept['name'],
+            "title_link": concept['url'],
+            "image_url": concept['image'],
+        }
+    ]
+
+    recommenders = []
+    for r in recommendations:
+        print r
+        source = (person for person in people if person['id'] == r['source']).next()
+        recommenders.append(source['name'])
+        
+    recommenders_msg =  "Recommended by: " + ", ".join(recommenders)
+    attachments.append({
+            "fallback" : recommenders_msg,
+            "title" : recommenders_msg,
+        })
+    slack_client.api_call("chat.postMessage", channel=channel, attachments=attachments, as_user=True)
+
+
+# Returns the slack profile object for the userid.
+def get_profile(userid):
     key =os.environ.get('USER_KEY')
     api_request = "https://slack.com/api/users.profile.get?token=%s&user=%s&pretty=1" % (key, userid,)
 
     r = requests.get(api_request)
-    r = r.text.split()
+    return json.loads(r.text)['profile']
 
-    return r[r.index('"first_name":')+1][1:-2]
+# Gets the user name for userid.
+def get_user_name(userid):
+    return get_profile(userid)['real_name_normalized']
 
 def get_user_from_string(command):
     for word in command:

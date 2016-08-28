@@ -41,9 +41,12 @@ def handle_command(command, channel, user):
             else:
                 break
 
-        response = "%s, %s has made a recommendation: %s" % (get_user_name(send_to), get_user_name(user.upper()), recommendation)
-        recommend(user.upper(), send_to, recommendation)
-        slack_client.api_call("chat.postMessage", channel=channel, text=response, as_user=True)
+        rec = recommend(user.upper(), send_to, recommendation)
+        if not "errors" in rec:
+            post_recommendation_to_chat(rec, channel)
+        else:
+            slack_client.api_call("chat.postMessage", channel=channel, text=rec['errors']['message'], as_user=True)
+
 
     elif command[0] == HLP_COMMAND:
         response = "Welcome to the 2it bot. Here are sample commands to get started.\n  @2it recommend Mr. Robot to @adam\n  @2it recommend Harry Potter and the Sorcerer's Stone to @Ryan"
@@ -92,6 +95,7 @@ def recommend(source, target, concept):
 
     r = requests.post(api_request, json=data)
     print r.text
+    return json.loads(r.text)
 
 # Gets a person object based on a slack_id from our api.
 def get_person(slack_id):
@@ -122,10 +126,15 @@ def get_random_recommendation(slack_id):
 # Posts a single recommendation to the slack channel.
 def post_recommendation_to_chat(rec, channel):
     concept = rec['concept']
-    recommendations = rec['recommendations']
+    if 'recommendations' in rec:
+        recommendations = rec['recommendations']
+    else:
+        recommendations = [rec['recommendation']]
     people = rec['persons']
 
-    plaintext = "You should get around to checking out " + concept['name']
+    target = (person for person in people if person['id'] == recommendations[0]['target']).next()
+
+    plaintext = target['name'] + " should get around to checking out " + concept['name']
 
     link = concept['url']
 
@@ -153,6 +162,7 @@ def post_recommendation_to_chat(rec, channel):
     attachments.append({
             "fallback" : recommenders_msg,
             "text" : recommenders_msg,
+            "color" : "#8736a6",
         })
     slack_client.api_call("chat.postMessage", channel=channel, attachments=attachments, as_user=True)
 
